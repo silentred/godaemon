@@ -15,6 +15,7 @@ func main() {
 
 		ProcessCmd:  "sleep",
 		ProcessArgs: []string{"180"},
+		PIDFile:     "/tmp/test.pid",
 	}
 
 	err := dm.RunProcess()
