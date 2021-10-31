@@ -37,6 +37,9 @@ type DaemonService struct {
 	// PIDFIle is the file that records the pid of the process
 	PIDFile string
 
+	// cmd
+	Command *exec.Cmd
+
 	// watcher fields
 	watcherRunning bool
 	watcherStopCh  chan struct{}
@@ -64,6 +67,12 @@ func (ds *DaemonService) RunProcess() (err error) {
 			log.Println(err)
 			return
 		}
+		ds.ProcessInfo.PID = pid
+		ds.ProcessInfo, err = FindProcessByPid(pid)
+		if err != nil {
+			log.Printf("pid in pidfile is %d, but real process is %+v, err %+v \n", pid, ds.ProcessInfo, err)
+			return
+		}
 	}
 
 	err = ioutil.WriteFile(ds.PIDFile, []byte(fmt.Sprintf("%d", pid)), fs.ModePerm)
@@ -86,9 +95,45 @@ func (ds *DaemonService) RunWatcher() {
 	}
 	ticker := time.NewTicker(ds.KeepAliveWatchInterval)
 
-	for range ticker.C {
-		// TODO:
-		log.Println("watching process")
+	var err error
+	var running bool
+	for {
+		select {
+		case <-ticker.C:
+			// if DaemonService restart,  ds.Command is nil
+			if ds.Command != nil &&
+				ds.Command.ProcessState != nil &&
+				!ds.Command.ProcessState.Exited() {
+
+				log.Println("process is running", ds.ProcessInfo.PID)
+				running = true
+			}
+
+			//
+			if !running && ds.ProcessInfo.PID > 0 {
+				var info ProcessInfo
+				info, err = FindProcessByPid(ds.ProcessInfo.PID)
+				if err != nil {
+					log.Println(err, info)
+				}
+				if info.PPID > 0 {
+					ds.ProcessInfo = info
+					running = true
+				}
+			}
+
+			if !running {
+				log.Printf("found process exited %d", ds.Command.ProcessState.ExitCode())
+				err = ds.RunProcess()
+				if err != nil {
+					log.Println(err)
+				}
+			}
+
+		case <-ds.watcherStopCh:
+			log.Println("watcher is quitting")
+			return
+		}
 	}
 }
 
@@ -99,6 +144,7 @@ func (ds *DaemonService) StopWatcher() {
 
 func (ds *DaemonService) runDaemon() (pid int, err error) {
 	cmd := exec.Command(ds.ProcessCmd, ds.ProcessArgs...)
+	ds.Command = cmd
 	cmd.Env = os.Environ()
 	cmd.Stdin = nil
 	cmd.ExtraFiles = nil
@@ -142,6 +188,7 @@ func (ds *DaemonService) runDaemon() (pid int, err error) {
 
 // GetProcessInfo gets process info. Tt is a read-only operation
 func (ds *DaemonService) GetProcessInfo() (pid int, running bool, err error) {
+	// check pidfile
 	if len(ds.PIDFile) == 0 {
 		err = fmt.Errorf("pidfile is empty")
 		return
