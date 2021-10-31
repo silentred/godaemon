@@ -221,9 +221,10 @@ func (ds *DaemonService) GetProcessInfo() (pid int, running bool, err error) {
 			log.Printf("real process is %+v, want %s \n", ds.ProcessInfo, ds.ProcessCmd)
 		}
 
-		log.Printf("found process by id %d, process: %+v \n", pid, ds.ProcessInfo)
-		running = true
-		return
+		if err == nil && ds.ProcessInfo.Cmd == ds.ProcessCmd {
+			log.Printf("found process by id %d, process: %+v \n", pid, ds.ProcessInfo)
+			running = true
+		}
 	}
 
 	// cannot find by pidfile; try find by cmd name
