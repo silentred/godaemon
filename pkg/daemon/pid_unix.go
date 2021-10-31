@@ -15,7 +15,7 @@ import (
 func FindProcessByCmdName(cmd string) (info ProcessInfo, err error) {
 	// ps xao pid,ppid,sid,command | grep $NAME | grep -v grep
 	var out []byte
-	var args = []string{"-c", fmt.Sprintf("ps xao pid,ppid,pgid,sid,state,comma`nd | grep %s | grep -v grep", cmd)}
+	var args = []string{"-c", fmt.Sprintf("ps xao pid,ppid,pgid,sid,state,command | grep %s | grep -v grep", cmd)}
 	out, err = exec.Command("sh", args...).CombinedOutput()
 	if err != nil {
 		return
