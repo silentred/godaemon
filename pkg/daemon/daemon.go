@@ -21,6 +21,9 @@ type DaemonService struct {
 	// KeepAliveWatchInterval is the interval to check process state
 	KeepAliveWatchInterval time.Duration
 
+	// WaitProcessExit if true, RunProcess blocks until process exits
+	WaitProcessExit bool
+
 	// StdOutFile is the output file path
 	StdOutFile string
 	StdErrFile string
@@ -83,6 +86,12 @@ func (ds *DaemonService) RunProcess() (err error) {
 
 	log.Printf("process is running at pid %d \n", pid)
 
+	// wait for process quitting
+	if ds.WaitProcessExit {
+		err = ds.Command.Wait()
+		return
+	}
+
 	return
 }
 
@@ -96,21 +105,12 @@ func (ds *DaemonService) RunWatcher() {
 	ticker := time.NewTicker(ds.KeepAliveWatchInterval)
 
 	var err error
-	var running bool
+
 	for {
 		select {
 		case <-ticker.C:
-			// if DaemonService restart,  ds.Command is nil
-			if ds.Command != nil &&
-				ds.Command.ProcessState != nil &&
-				!ds.Command.ProcessState.Exited() {
-
-				log.Println("process is running", ds.ProcessInfo.PID)
-				running = true
-			}
-
-			//
-			if !running && ds.ProcessInfo.PID > 0 {
+			var running bool
+			if ds.ProcessInfo.PID > 0 {
 				var info ProcessInfo
 				info, err = FindProcessByPid(ds.ProcessInfo.PID)
 				if err != nil {
@@ -119,14 +119,19 @@ func (ds *DaemonService) RunWatcher() {
 				if info.PPID > 0 {
 					ds.ProcessInfo = info
 					running = true
+					log.Println("process is running ", info)
 				}
+			} else {
+				log.Panicln("unable to watch pid", ds.ProcessInfo.PID)
 			}
 
 			if !running {
-				log.Printf("found process exited %d", ds.Command.ProcessState.ExitCode())
+				log.Println("found process exited")
 				err = ds.RunProcess()
 				if err != nil {
 					log.Println(err)
+				} else {
+					running = true
 				}
 			}
 
@@ -210,12 +215,10 @@ func (ds *DaemonService) GetProcessInfo() (pid int, running bool, err error) {
 		ds.ProcessInfo, err = FindProcessByPid(pid)
 		if err != nil {
 			log.Printf("pid in pidfile is %d, but real process is %+v, err %+v \n", pid, ds.ProcessInfo, err)
-			return
 		}
 
 		if ds.ProcessInfo.Cmd != ds.ProcessCmd {
 			log.Printf("real process is %+v, want %s \n", ds.ProcessInfo, ds.ProcessCmd)
-			return
 		}
 
 		log.Printf("found process by id %d, process: %+v \n", pid, ds.ProcessInfo)

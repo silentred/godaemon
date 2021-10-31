@@ -9,6 +9,7 @@ import (
 func main() {
 	dm := &daemon.DaemonService{
 		KeepProcessAlive: true,
+		WaitProcessExit:  true,
 
 		StdOutFile: "/tmp/out.log",
 		StdErrFile: "/tmp/error.log",
@@ -25,6 +26,4 @@ func main() {
 		log.Println(err)
 		return
 	}
-
-	dm.RunWatcher()
 }
