@@ -2,20 +2,27 @@ package daemon
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 type DaemonService struct {
 	// KeepProcessAlive If it is true, a new goroutine will watch this process.
 	// If the process exits without 0 exit-code, it will restart the process.
 	KeepProcessAlive bool
+	// KeepAliveWatchInterval is the interval to check process state
+	KeepAliveWatchInterval time.Duration
 
 	// StdOutFile is the output file path
 	StdOutFile string
-	StdErrFIle string
+	StdErrFile string
 	// LogRotateSize is the size limit of the logs. If the log exceeds the size,
 	// the log will be rotated
 	LogRotateSize int
@@ -23,24 +30,111 @@ type DaemonService struct {
 	// process info
 	ProcessCmd  string
 	ProcessArgs []string
+	ProcessInfo ProcessInfo
 	// IsProcessCmdUnique if rue, it means the process can be found by process cmd nme
 	IsProcessCmdUnique bool
 	// PIDFIle is the file that records the pid of the process
 	PIDFile string
+
+	// watcher fields
+	watcherRunning bool
+	watcherStopCh  chan struct{}
 }
 
-type ProcessIDInfo struct {
+type ProcessInfo struct {
+	Cmd, State string
+	// ids
 	PID, PPID, PGID, SID int
 }
 
-func Run() {
+func (ds *DaemonService) RunProcess() (err error) {
+	var pid int
+	var running bool
 	// check if process is alive
-	// check pid file
-	// check process name
+	pid, running, err = ds.GetProcessInfo()
+	if err != nil {
+		log.Println(err)
+	}
+
+	if !running {
+		// start the process
+		pid, err = ds.runDaemon()
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}
+
+	log.Printf("process is running at pid %d \n", pid)
+
+	return
 }
 
-//
-func (ds *DaemonService) GetPID() (pid int, running bool, err error) {
+func (ds *DaemonService) RunWatcher() {
+	log.Println("start watching the process")
+	ds.watcherRunning = true
+	// set default interval to 5s
+	if ds.KeepAliveWatchInterval == time.Duration(0) {
+		ds.KeepAliveWatchInterval = 5 * time.Second
+	}
+	ticker := time.NewTicker(ds.KeepAliveWatchInterval)
+
+	for range ticker.C {
+		// TODO:
+		log.Println("watching process")
+	}
+}
+
+func (ds *DaemonService) StopWatcher() {
+	ds.watcherRunning = false
+	ds.watcherStopCh <- struct{}{}
+}
+
+func (ds *DaemonService) runDaemon() (pid int, err error) {
+	cmd := exec.Command(ds.ProcessCmd, ds.ProcessArgs...)
+	cmd.Env = os.Environ()
+	cmd.Stdin = nil
+	cmd.ExtraFiles = nil
+
+	// setup stdout and stderr
+	var stdoutFile, stderrFile io.Writer
+	var fileErr error
+	if len(ds.StdOutFile) > 0 {
+		stdoutFile, fileErr = os.Open(ds.StdOutFile)
+		if fileErr != nil {
+			log.Println(fileErr)
+		} else {
+			cmd.Stdout = stdoutFile
+		}
+	}
+
+	if len(ds.StdErrFile) > 0 {
+		stderrFile, fileErr = os.Open(ds.StdErrFile)
+		if fileErr != nil {
+			log.Println(fileErr)
+		} else {
+			cmd.Stderr = stderrFile
+		}
+	}
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		// Setsid is used to detach the process from the parent (normally a shell)
+		//
+		// The disowning of a child process is accomplished by executing the system call
+		// setpgrp() or setsid(), (both of which have the same functionality) as soon as
+		// the child is forked. These calls create a new process session group, make the
+		// child process the session leader, and set the process group ID to the process
+		// ID of the child. https://bsdmag.org/unix-kernel-system-calls/
+		Setsid: true,
+	}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	return cmd.Process.Pid, nil
+}
+
+// GetProcessInfo gets process info. Tt is a read-only operation
+func (ds *DaemonService) GetProcessInfo() (pid int, running bool, err error) {
 	if len(ds.PIDFile) == 0 {
 		err = fmt.Errorf("pidfile is empty")
 		return
@@ -57,20 +151,37 @@ func (ds *DaemonService) GetPID() (pid int, running bool, err error) {
 	}
 
 	if pid > 0 {
-		// TODO: should trust PIDFile???
-		// Find process info in /proc/$ID/stat
-		/*
-			Example:
-			cat /proc/1716828/stat
-			1716828 (caddy) S 1 1716828 1716828 0 -1 1077936384 518499 0 13489 0 88881 89117 0 0 20 0 11 0 1155533824 122359808 6246 18446744073709551615 1 1 0 0 0 0 0 0 2143420159 0 0 0 17 0 0 0 339 0 0 0 0 0 0 0 0 0 0
-		*/
+		// should not trust PIDFile
+		// Find process info in /proc/$ID/stat , verify the command is right
+		ds.ProcessInfo, err = FindProcessByPid(pid)
+		if err != nil {
+			log.Printf("pid in pidfile is %d, but real process is %+v, err %+v \n", pid, ds.ProcessInfo, err)
+			return
+		}
+
+		if ds.ProcessInfo.Cmd != ds.ProcessCmd {
+			log.Printf("real process is %+v, want %s \n", ds.ProcessInfo, ds.ProcessCmd)
+			return
+		}
+
+		log.Printf("found process by id %d, process: %+v \n", pid, ds.ProcessInfo)
 		running = true
 		return
 	}
 
 	// cannot find by pidfile; try find by cmd name
 	if ds.IsProcessCmdUnique {
+		ds.ProcessInfo, err = FindProcessByCmdName(ds.ProcessCmd)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 
+		if ds.ProcessInfo.PID > 0 {
+			pid = ds.ProcessInfo.PID
+			running = true
+			log.Printf("found process by id %d, process: %+v \n", pid, ds.ProcessInfo)
+		}
 	}
 
 	return
