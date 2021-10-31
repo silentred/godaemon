@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"os"
@@ -63,6 +64,12 @@ func (ds *DaemonService) RunProcess() (err error) {
 			log.Println(err)
 			return
 		}
+	}
+
+	err = ioutil.WriteFile(ds.PIDFile, []byte(fmt.Sprintf("%s", pid)), fs.ModePerm)
+	if err != nil {
+		log.Println(err)
+		return
 	}
 
 	log.Printf("process is running at pid %d \n", pid)
