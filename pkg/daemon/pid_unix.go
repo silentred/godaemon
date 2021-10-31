@@ -97,7 +97,7 @@ func FindProcessByPid(pid int) (info ProcessInfo, err error) {
 	// Move past the image name and start parsing the rest
 	data = data[binStart+binEnd+2:]
 	_, err = fmt.Sscanf(data,
-		"%c %d %d %d",
+		"%s %d %d %d",
 		&info.State,
 		&info.PPID,
 		&info.PGID,
