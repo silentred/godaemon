@@ -18,9 +18,8 @@ type DaemonService struct {
 	// KeepProcessAlive If it is true, a new goroutine will watch this process.
 	// If the process exits without 0 exit-code, it will restart the process.
 	KeepProcessAlive bool
-	// KeepAliveWatchInterval is the interval to check process state
-	KeepAliveWatchInterval time.Duration
-
+	// WatchInterval is the interval to check process state
+	WatchInterval time.Duration
 	// WaitProcessExit if true, RunProcess blocks until process exits
 	WaitProcessExit bool
 
@@ -43,9 +42,8 @@ type DaemonService struct {
 	// cmd
 	Command *exec.Cmd
 
-	// watcher fields
-	watcherRunning bool
-	watcherStopCh  chan struct{}
+	// watcherRunning bool
+	// watcherStopCh  chan struct{}
 }
 
 type ProcessInfo struct {
@@ -88,63 +86,48 @@ func (ds *DaemonService) RunProcess() (err error) {
 
 	// wait for process quitting
 	if ds.WaitProcessExit {
-		err = ds.Command.Wait()
+		if ds.Command != nil {
+			err = ds.Command.Wait()
+			if err != nil {
+				log.Println(err)
+			}
+		} else {
+			ds.WaitProcess()
+		}
 		return
 	}
 
 	return
 }
 
-func (ds *DaemonService) RunWatcher() {
-	log.Println("start watching the process")
-	ds.watcherRunning = true
+func (ds *DaemonService) WaitProcess() {
+	log.Println("start waiting for the process")
 	// set default interval to 5s
-	if ds.KeepAliveWatchInterval == time.Duration(0) {
-		ds.KeepAliveWatchInterval = 5 * time.Second
+	if ds.WatchInterval == time.Duration(0) {
+		ds.WatchInterval = 5 * time.Second
 	}
-	ticker := time.NewTicker(ds.KeepAliveWatchInterval)
+	ticker := time.NewTicker(ds.WatchInterval)
 
 	var err error
-
-	for {
-		select {
-		case <-ticker.C:
-			var running bool
-			if ds.ProcessInfo.PID > 0 {
-				var info ProcessInfo
-				info, err = FindProcessByPid(ds.ProcessInfo.PID)
-				if err != nil {
-					log.Println(err, info)
-				}
-				if info.PPID > 0 {
-					ds.ProcessInfo = info
-					running = true
-					log.Println("process is running ", info)
-				}
+	for range ticker.C {
+		if ds.ProcessInfo.PID > 0 {
+			var info ProcessInfo
+			info, err = FindProcessByPid(ds.ProcessInfo.PID)
+			if err != nil {
+				log.Println(err, info)
+				// TODO: correct PID ?
+			}
+			if info.PPID > 0 {
+				ds.ProcessInfo = info
+				log.Println("process is running ", info)
 			} else {
-				log.Panicln("unable to watch pid", ds.ProcessInfo.PID)
+				log.Println("process has exited")
+				return
 			}
-
-			if !running {
-				log.Println("found process exited")
-				err = ds.RunProcess()
-				if err != nil {
-					log.Println(err)
-				} else {
-					running = true
-				}
-			}
-
-		case <-ds.watcherStopCh:
-			log.Println("watcher is quitting")
-			return
+		} else {
+			log.Panicln("unable to watch pid", ds.ProcessInfo.PID)
 		}
 	}
-}
-
-func (ds *DaemonService) StopWatcher() {
-	ds.watcherRunning = false
-	ds.watcherStopCh <- struct{}{}
 }
 
 func (ds *DaemonService) runDaemon() (pid int, err error) {
@@ -224,6 +207,7 @@ func (ds *DaemonService) GetProcessInfo() (pid int, running bool, err error) {
 		if err == nil && ds.ProcessInfo.Cmd == ds.ProcessCmd {
 			log.Printf("found process by id %d, process: %+v \n", pid, ds.ProcessInfo)
 			running = true
+			return
 		}
 	}
 
