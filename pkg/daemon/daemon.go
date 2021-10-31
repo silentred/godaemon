@@ -66,7 +66,7 @@ func (ds *DaemonService) RunProcess() (err error) {
 		}
 	}
 
-	err = ioutil.WriteFile(ds.PIDFile, []byte(fmt.Sprintf("%s", pid)), fs.ModePerm)
+	err = ioutil.WriteFile(ds.PIDFile, []byte(fmt.Sprintf("%d", pid)), fs.ModePerm)
 	if err != nil {
 		log.Println(err)
 		return
