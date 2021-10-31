@@ -100,7 +100,7 @@ func (ds *DaemonService) runDaemon() (pid int, err error) {
 	var stdoutFile, stderrFile io.Writer
 	var fileErr error
 	if len(ds.StdOutFile) > 0 {
-		stdoutFile, fileErr = os.Open(ds.StdOutFile)
+		stdoutFile, fileErr = os.OpenFile(ds.StdOutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 		if fileErr != nil {
 			log.Println(fileErr)
 		} else {
@@ -109,7 +109,7 @@ func (ds *DaemonService) runDaemon() (pid int, err error) {
 	}
 
 	if len(ds.StdErrFile) > 0 {
-		stderrFile, fileErr = os.Open(ds.StdErrFile)
+		stderrFile, fileErr = os.OpenFile(ds.StdErrFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 		if fileErr != nil {
 			log.Println(fileErr)
 		} else {
